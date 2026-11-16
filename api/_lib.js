@@ -93,11 +93,23 @@ const demo = (() => {
 })();
 
 /* ---------- Google Sheets client ---------- */
+function normalizeKey(raw) {
+  let k = String(raw || '').trim();
+  if ((k.startsWith('"') && k.endsWith('"')) || (k.startsWith("'") && k.endsWith("'"))) k = k.slice(1, -1);
+  k = k.replace(/\\n/g, '\n').replace(/\r/g, '');
+  const m = k.match(/-----BEGIN PRIVATE KEY-----([\s\S]*?)-----END PRIVATE KEY-----/);
+  if (m) {
+    const body = m[1].replace(/\s+/g, '');
+    k = '-----BEGIN PRIVATE KEY-----\n' + body.match(/.{1,64}/g).join('\n') + '\n-----END PRIVATE KEY-----\n';
+  }
+  return k;
+}
+
 let _sheets;
 function sheetsClient() {
   if (_sheets) return _sheets;
   const { google } = require('googleapis');
-  const key = String(process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+  const key = normalizeKey(process.env.GOOGLE_PRIVATE_KEY);
   const auth = new google.auth.JWT({
     email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
     key,

@@ -65,14 +65,15 @@ function connectedIds() { // SHEET_IDS="id1,id2" or "id1|Label one,id2|Label two
     return { id: id.trim(), label: (label || '').trim() };
   });
 }
-function assertConnected(id) {
+function assertConnected(id) { // access is already limited to what is shared with the service account
   if (DEMO) return;
-  if (!connectedIds().some((c) => c.id === id)) {
+  if (!/^[A-Za-z0-9_-]{20,}$/.test(String(id || ''))) {
     const e = new Error('That sheet is not connected.'); e.status = 403; throw e;
   }
 }
 function friendly(e) {
   const m = (e && e.message) || String(e);
+  if (/has not been used|is disabled|SERVICE_DISABLED/i.test(m)) return 'A Google API is switched off. In Google Cloud, enable both the Google Sheets API and the Google Drive API.';
   if (/not found|404/i.test(m)) return 'Sheet not found. Check the ID in SHEET_IDS.';
   if (/permission|403|forbidden/i.test(m)) return 'No access. Share the sheet with your service-account email as Editor.';
   return m.slice(0, 200);
@@ -105,18 +106,41 @@ function normalizeKey(raw) {
   return k;
 }
 
-let _sheets;
+const MAX_SHEETS = 25; // keeps the dropdown fast and inside Google's per-minute limits
+let _auth, _sheets;
+function authClient() {
+  if (_auth) return _auth;
+  const { google } = require('googleapis');
+  _auth = new google.auth.JWT({
+    email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+    key: normalizeKey(process.env.GOOGLE_PRIVATE_KEY),
+    scopes: [
+      'https://www.googleapis.com/auth/spreadsheets',
+      'https://www.googleapis.com/auth/drive.metadata.readonly', // lets the app list sheets, nothing more
+    ],
+  });
+  return _auth;
+}
 function sheetsClient() {
   if (_sheets) return _sheets;
   const { google } = require('googleapis');
-  const key = normalizeKey(process.env.GOOGLE_PRIVATE_KEY);
-  const auth = new google.auth.JWT({
-    email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-    key,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-  });
-  _sheets = google.sheets({ version: 'v4', auth });
+  _sheets = google.sheets({ version: 'v4', auth: authClient() });
   return _sheets;
+}
+
+// Every Google Sheet the service account can see (shared directly or through a shared folder).
+// Set DRIVE_FOLDER_ID to only list sheets that sit directly inside one folder.
+async function listDriveSheets() {
+  const { google } = require('googleapis');
+  const drive = google.drive({ version: 'v3', auth: authClient() });
+  let qy = "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false";
+  const folder = String(process.env.DRIVE_FOLDER_ID || '').trim().replace(/[^A-Za-z0-9_-]/g, '');
+  if (folder) qy += ` and '${folder}' in parents`;
+  const r = await drive.files.list({
+    q: qy, orderBy: 'modifiedTime desc', pageSize: MAX_SHEETS,
+    fields: 'files(id,name)', supportsAllDrives: true, includeItemsFromAllDrives: true,
+  });
+  return r.data.files || [];
 }
 
 async function listConnected() {
@@ -126,18 +150,27 @@ async function listConnected() {
       tabs: Object.entries(s.tabs).map(([title, v]) => ({ title, rows: v.length - 1 })),
     }));
   }
-  const out = [];
-  for (const { id, label } of connectedIds()) {
+  // 1) sheets named in SHEET_IDS (optional), 2) everything else the service account can see in Drive
+  const wanted = new Map(); // id -> label
+  for (const { id, label } of connectedIds()) wanted.set(id, label);
+  let driveError = null;
+  try {
+    for (const f of await listDriveSheets()) if (!wanted.has(f.id)) wanted.set(f.id, f.name);
+  } catch (e) { driveError = friendly(e); }
+
+  const entries = Array.from(wanted.entries()).slice(0, MAX_SHEETS);
+  const out = await Promise.all(entries.map(async ([id, label]) => {
     try {
       const r = await sheetsClient().spreadsheets.get({
         spreadsheetId: id, fields: 'properties.title,sheets.properties(title,gridProperties(rowCount))',
       });
-      out.push({
+      return {
         id, title: label || r.data.properties.title, ok: true,
         tabs: r.data.sheets.map((s) => ({ title: s.properties.title, rows: Math.max(0, (s.properties.gridProperties.rowCount || 1) - 1) })),
-      });
-    } catch (e) { out.push({ id, title: label || id, ok: false, error: friendly(e) }); }
-  }
+      };
+    } catch (e) { return { id, title: label || id, ok: false, error: friendly(e) }; }
+  }));
+  if (driveError) out.push({ id: '__drive_error', title: 'Could not list your Drive sheets', ok: false, error: driveError });
   return out;
 }
 

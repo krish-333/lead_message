@@ -224,7 +224,7 @@ async function loadSheets(){
     const j=await api('/api/sheets');conns=j.sheets||[];
     $('#connErr').classList.add('hide');
     if(!conns.length){$('#selSheet').innerHTML='';$('#selTab').innerHTML='';$('#app').classList.add('hide');
-      $('#connErr').textContent='No sheets connected yet. Add your spreadsheet IDs to the SHEET_IDS setting in Vercel, then redeploy.';$('#connErr').classList.remove('hide');return}
+      $('#connErr').textContent='No sheets found yet. Share a Google Sheet (or a folder of sheets) with your service-account email as Editor, then reload this page.';$('#connErr').classList.remove('hide');return}
     $('#selSheet').innerHTML=conns.map(s=>`<option value="${esc(s.id)}">${s.ok?'● ':'⚠ '}${esc(s.title)}</option>`).join('');
     const last=store.get('wa_last',{});
     if(last.id&&conns.some(s=>s.id===last.id))$('#selSheet').value=last.id;

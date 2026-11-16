@@ -19,6 +19,15 @@ module.exports = async (req, res) => {
     }
     const header = (await readTab(sheetId, tab, `${q(tab)}!1:1`))[0] || [];
     const map = await ensureTracking(sheetId, tab, header);
+    // Guard: if another device already logged this step for this contact, do not log it twice.
+    for (const key of ['First Sent', 'Follow-up 1 Sent', 'Follow-up 2 Sent']) {
+      if (set[key] === '$now') {
+        const existing = await readCell(sheetId, tab, row, map[key]);
+        if (existing && String(existing).trim()) {
+          return send(res, 409, { error: `Already messaged (${key.replace(' Sent', '')} on ${existing}). Updating your list.` });
+        }
+      }
+    }
     const now = istNow();
     const cells = [], applied = {};
     for (const key of Object.keys(set)) {

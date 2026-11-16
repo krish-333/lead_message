@@ -93,7 +93,7 @@ select.sm{width:auto;padding:4px 6px;font-size:13px}
         <div><label for="selTab">Tab</label><select id="selTab"></select></div>
         <div style="flex:0 0 auto;align-self:flex-end"><button class="btn ghost" id="refresh">Refresh</button></div>
       </div>
-      <div class="hint" id="syncInfo"></div>
+      <div class="hint"><span id="syncInfo"></span> <span id="saveInfo"></span></div>
       <div id="connErr" class="hint hide" style="color:var(--warn)"></div>
     </div>
 
@@ -127,9 +127,24 @@ select.sm{width:auto;padding:4px 6px;font-size:13px}
             <button class="chip" data-ins="{name}">{name}</button><button class="chip" data-ins="{area}">{area}</button>
             <button class="chip" data-ins="{type}">{type}</button><button class="chip" data-ins="{offer}">{offer}</button>
             <button class="chip" data-ins="{me}">{me}</button>
+            <button class="chip" data-ins="{hook}">{hook}</button><button class="chip" data-ins="{sector}">{sector}</button><button class="chip" data-ins="{pain}">{pain}</button>
             <button class="link" id="resetTpl" style="margin-left:auto">Reset this template</button></div>
           <div class="hint">Preview with your first contact:</div>
           <div class="preview" id="preview"></div></div>
+        <details id="hookBox" class="hide"><summary>Hooks: opening lines for each business type</summary>
+          <div class="hint" style="margin-top:8px">The hook is the opening question that replaces <b>{hook}</b> in your template. The app picks it by matching the <b>Type</b> column of your sheet (or the business name). Write several hooks for one type, one per line, and they rotate between contacts so your messages don't all look identical. Saved in this browser.</div>
+          <div id="hookList"></div>
+          <div style="border-top:1px solid var(--line);padding-top:12px;margin-top:4px"><b>Add your own</b>
+            <div class="row" style="margin-top:8px">
+              <div><label for="nhName">Business type</label><input type="text" id="nhName" placeholder="e.g. Real estate"></div>
+              <div><label for="nhKw">Match words (comma separated)</label><input type="text" id="nhKw" placeholder="e.g. real estate, builder, property"></div></div>
+            <label for="nhHook" style="margin-top:8px">Hook (one per line)</label>
+            <textarea id="nhHook" style="min-height:64px" placeholder="Quick question: how do you keep track of site visits and follow-ups with buyers today?"></textarea>
+            <div class="row" style="margin-top:8px">
+              <div><label for="nhLabel">Who you help (optional)</label><input type="text" id="nhLabel" placeholder="e.g. real estate agents"></div>
+              <div><label for="nhPain">The problem in a few words (optional)</label><input type="text" id="nhPain" placeholder="e.g. lost site-visit follow-ups"></div></div>
+            <button class="btn sm" id="nhAdd" style="margin-top:10px">Add hook</button></div>
+        </details>
         <details><summary>Column mapping (auto-detected)</summary>
           <div class="row" style="margin-top:10px">
             <div><label for="cName">Business</label><select id="cName"></select></div>
@@ -148,7 +163,7 @@ select.sm{width:auto;padding:4px 6px;font-size:13px}
             <select id="fStat">
               <option value="new">New (not messaged)</option><option value="due">Follow-up due</option>
               <option value="sent">Messaged, waiting</option><option value="replied">Replied</option>
-              <option value="nowa">No WhatsApp</option><option value="all">Everything</option></select></div>
+              <option value="skipped">Skipped</option><option value="nowa">No WhatsApp</option><option value="all">Everything</option></select></div>
           <div><label for="fSort">Sort</label>
             <select id="fSort"><option value="sheet">Sheet order</option><option value="rev">Most reviews first</option></select></div>
         </div>
@@ -164,7 +179,7 @@ select.sm{width:auto;padding:4px 6px;font-size:13px}
 <script>
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const store={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
+const store={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}if(syncKey(k))queueSave(k)}};
 
 /* ---------- templates ---------- */
 const OFFER_DEFAULT="your client gets 3% off their project and you receive a 3% referral fee once they have paid";
@@ -177,7 +192,7 @@ const TPLS={
   first:"Hi, is this {name}?\n\n{hook}\n\nI'm {me}. I help {sector} sort this out. Worth a quick chat?",
   fu1:"Hi {name}, following up on my question about {pain}.\n\nIf it is a headache for you, just reply \"yes\" and I'll send one short example of how it gets fixed.",
   fu2:"Hi {name}, last note from me so I don't clutter your inbox. If this isn't a priority right now, no problem at all. If it ever is, just reply here. - {me}"}};
-const SECTORS=[
+const BASE_SECTORS=[
 {id:'jew',short:'Jewellery & bullion',re:/jewel|bullion|gold|diamond|gem|silver|ornament/i,label:'jewellers and bullion dealers',pain:'tracking high-value stock and karigar issue and return',hook:"Quick question: when a karigar takes gold for a job, how do you track what was issued vs returned today?"},
 {id:'ele',short:'Electronics & electrical',re:/electronic|electrical|component|audio/i,label:'electronics and electrical distributors',pain:'stock that never matches Tally, across thousands of SKUs',hook:"Quick question: does your physical stock ever match what Tally shows, or do you fix the gap by hand every month?"},
 {id:'pha',short:'Pharma & chemists',re:/pharma|chemist|medic|drug/i,label:'pharma distributors and chemists',pain:'batch and expiry tracking',hook:"Quick question: how do you track batch numbers and expiry dates right now, a register or memory?"},
@@ -185,7 +200,38 @@ const SECTORS=[
 {id:'job',short:'Job-work & contract mfg',re:/job.?work|contract manuf/i,label:'job-work and contract manufacturers',pain:'customer orders that get lost in WhatsApp and delay dispatch',hook:"Quick question: when a customer sends an order on WhatsApp, how do you make sure it doesn't get lost before dispatch?"},
 {id:'mfg',short:'Manufacturing units',re:/manufactur|engineering|fabricat|cnc|machine|works|plastic|packag|industr|garment|textile|print|food proc/i,label:'manufacturing units',pain:'raw material, scrap and shift attendance kept on paper',hook:"Quick question: are raw material, scrap and attendance still being written on paper at your unit?"},
 {id:'gen',short:'General',re:null,label:'growing businesses',pain:'stock registers, attendance, orders and payment follow-ups',hook:"Quick question: are stock, attendance and payment follow-ups still handled in registers or Excel at your business?"}];
-const sectorOf=(t,n)=>{for(const s of SECTORS)if(s.re&&s.re.test(t))return s;for(const s of SECTORS)if(s.re&&s.re.test(n))return s;return SECTORS[SECTORS.length-1]};
+/* ---------- hooks: built-in + your own (saved in this browser) ---------- */
+let SEC=null;
+const hookStore=()=>{const x=store.get('wa_hooks',null)||{};return{o:x.o||{},c:x.c||[]}};
+const kwRe=kw=>{const p=String(kw||'').split(',').map(x=>x.trim()).filter(Boolean).map(x=>x.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));return p.length?new RegExp(p.join('|'),'i'):null};
+function getSectors(){
+  if(SEC)return SEC;
+  const h=hookStore();
+  const custom=h.c.map(c=>({id:c.id,short:c.name||'Custom',custom:1,re:kwRe(c.kw),label:c.label||c.name||'businesses',pain:c.pain||'this',hook:c.hook||''}));
+  return SEC=custom.concat(BASE_SECTORS.map(s=>Object.assign({},s,h.o[s.id]||{})));
+}
+const sectorOf=(t,n)=>{const S=getSectors();for(const s of S)if(s.re&&s.re.test(t))return s;for(const s of S)if(s.re&&s.re.test(n))return s;return S[S.length-1]};
+const pickHook=c=>{const hs=String((c.sec&&c.sec.hook)||'').split('\n').map(x=>x.trim()).filter(Boolean);return hs.length?hs[(c.r||0)%hs.length]:''};
+function hooksChanged(){SEC=null;contacts.forEach(c=>{c.sec=sectorOf(c.type,c.name)});render()}
+function hookSet(id,f,v){
+  const h=hookStore(),i=h.c.findIndex(x=>x.id===id);
+  if(i>=0)h.c[i][f]=v;
+  else{h.o[id]=h.o[id]||{};if(v.trim()==='')delete h.o[id][f];else h.o[id][f]=v;if(!Object.keys(h.o[id]).length)delete h.o[id]}
+  store.set('wa_hooks',h);hooksChanged();
+}
+function renderHooks(){
+  const h=hookStore(),field=(id,f,lab,val,ph)=>`<div><label>${lab}</label><input type="text" data-id="${esc(id)}" data-f="${f}" value="${esc(val)}" placeholder="${esc(ph||'')}"></div>`;
+  $('#hookList').innerHTML=getSectors().map(s=>{
+    const raw=s.custom?h.c.find(x=>x.id===s.id)||{}:null,over=!s.custom&&h.o[s.id];
+    return `<div style="border-top:1px solid var(--line);padding:10px 0;margin-top:10px">
+      <div class="top"><b>${esc(s.short)}${s.custom?' <span class="tag sent">yours</span>':''}</b>
+        <span${s.custom?'':` data-rs="${esc(s.id)}"`}>${s.custom?`<button class="link" data-del="${esc(s.id)}">Delete</button>`:over?`<button class="link" data-reset="${esc(s.id)}">Reset to default</button>`:''}</span></div>
+      <textarea data-id="${esc(s.id)}" data-f="hook" style="min-height:64px;margin-top:6px">${esc(s.hook)}</textarea>
+      <details><summary>Matching and wording</summary><div class="row" style="margin-top:8px">
+        ${s.custom?field(s.id,'name','Business type',raw.name||''):''}${s.custom?field(s.id,'kw','Match words',raw.kw||'','comma separated'):''}
+        ${field(s.id,'label','Who you help ({sector})',s.custom?(raw.label||''):s.label,s.custom?raw.name:'')}${field(s.id,'pain','The problem ({pain})',s.custom?(raw.pain||''):s.pain,s.custom?'this':'')}
+      </div></details></div>`}).join('');
+}
 
 /* ---------- state ---------- */
 const K={'WA Status':'status','First Sent':'first','Follow-up 1 Sent':'fu1','Follow-up 2 Sent':'fu2','Replied':'replied','Outcome':'outcome','Referral Code':'code','Notes':'notes'};
@@ -251,17 +297,92 @@ async function loadLeads(){
   $('#syncInfo').textContent='Loading from Google Sheets…';
   try{
     const j=await api('/api/leads?sheetId='+encodeURIComponent(cur.id)+'&tab='+encodeURIComponent(cur.tab));
-    headers=j.headers;raw=j.rows;track=j.track;syncedAt=j.syncedAt;
+    headers=j.headers;raw=j.rows;track=j.track;syncedAt=j.syncedAt;lastSig=JSON.stringify([j.headers,j.rows]);
+    await pullSettings(true); // templates, hooks, name, campaign and column choices come from the sheet, so every device matches
     const m=store.get('map_'+cur.id+'|'+cur.tab,null)||detect(headers);
     setMapSelects(m);
     const sTitle=(conns.find(x=>x.id===cur.id)||{}).title||'';
     camp=store.get('camp_'+cur.id+'|'+cur.tab,/\bca\b|chartered|partner/i.test(sTitle+' '+cur.tab)?'ca':'biz');
     $('#camp').value=camp;loadTplUi();
     $('#app').classList.remove('hide');shown=100;build();
-    $('#syncInfo').innerHTML='<span class="live"></span>Live from Google Sheets · synced '+new Date(syncedAt).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});
+    showSynced();
   }catch(e){$('#syncInfo').textContent='';toast(e.message)}
 }
-window.addEventListener('focus',()=>{if(cur.id&&!busy&&Date.now()-syncedAt>120000)loadLeads()});
+
+/* ---------- shared settings + live refresh (every device sees the same thing) ---------- */
+const POLL_MS=20000;
+let lastSig='',markSeq=0,pollBusy=false,pending={},saveTimer=0,saving=false;
+const SYNC_RE=/^(wa_me|wa_offer|wa_hooks|wa_tpl_.+)$/;
+function syncKey(k){return SYNC_RE.test(k)||(!!cur.id&&(k.startsWith('camp_'+cur.id+'|')||k.startsWith('map_'+cur.id+'|')))}
+function setSaveMsg(s){$('#saveInfo').textContent={saving:'· Saving settings…',saved:'· Settings saved ✓',error:'· ⚠ Settings not saved, retrying…',offline:'· ⚠ Settings sync offline'}[s]||''}
+function showSynced(){$('#syncInfo').innerHTML='<span class="live"></span>Live from Google Sheets · synced '+new Date(syncedAt).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})}
+function queueSave(k){pending[k]=cur.id;clearTimeout(saveTimer);saveTimer=setTimeout(flushSave,700)}
+async function flushSave(keepalive){
+  clearTimeout(saveTimer);
+  const keys=Object.keys(pending);if(!keys.length||saving)return;
+  const id=pending[keys[0]],mine=keys.filter(k=>pending[k]===id),set={};
+  mine.forEach(k=>{const v=localStorage.getItem(k);if(v!=null)set[k]=v});
+  mine.forEach(k=>delete pending[k]);
+  saving=true;setSaveMsg('saving');let good=true;
+  try{await api('/api/settings',{method:'POST',keepalive:keepalive===true,body:JSON.stringify({sheetId:id,set})});setSaveMsg('saved')}
+  catch(e){good=false;mine.forEach(k=>{if(!(k in pending))pending[k]=id});setSaveMsg('error')}
+  saving=false;
+  if(Object.keys(pending).length)saveTimer=setTimeout(flushSave,good?700:8000);
+}
+// Copies the sheet's saved settings into this browser. Returns true if anything changed.
+async function pullSettings(first){
+  const id=cur.id;if(!id)return false;
+  try{
+    const j=await api('/api/settings?sheetId='+encodeURIComponent(id));
+    if(id!==cur.id)return false;
+    const remote=j.settings||{};let changed=false;
+    for(const [k,val] of Object.entries(remote)){
+      if(!syncKey(k)||pending[k]===id)continue; // a change you just made and have not saved yet wins
+      if(localStorage.getItem(k)!==val){try{localStorage.setItem(k,val)}catch(e){}changed=true}
+    }
+    if(first){ // upload anything this browser has that the sheet does not (your existing templates, the first time)
+      for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(syncKey(k)&&!(k in remote))pending[k]=id}
+      if(Object.keys(pending).length)flushSave();
+    }
+    return changed;
+  }catch(e){setSaveMsg('offline');return false}
+}
+// Re-draws the settings fields after another device changed something, without touching the field you are typing in.
+function applySettingsUi(){
+  const ae=document.activeElement,typing=el=>ae===el;
+  const c=store.get('camp_'+cur.id+'|'+cur.tab,null);
+  if(c&&c!==camp&&!typing($('#camp'))){camp=c;$('#camp').value=c}
+  const m=store.get('map_'+cur.id+'|'+cur.tab,null);
+  if(m&&!['#cName','#cPhone','#cArea','#cType','#cRev'].some(s=>typing($(s))))setMapSelects(m);
+  SEC=null;
+  $('#offerBox').classList.toggle('hide',camp!=='ca');$('#hookBox').classList.toggle('hide',camp!=='biz');
+  if(!typing($('#me')))$('#me').value=store.get('wa_me','');
+  if(!typing($('#offer')))$('#offer').value=store.get('wa_offer',OFFER_DEFAULT);
+  if(!typing($('#tpl')))$('#tpl').value=tplGet(camp,kind);
+  if(!$('#hookList').contains(ae))renderHooks();
+  build();
+}
+// Quiet background refresh: new messages logged on other devices and changed settings show up within ~20 seconds.
+async function refreshAll(){
+  if(!cur.id||!cur.tab||pollBusy||busy||document.visibilityState==='hidden'||$('#main').classList.contains('hide'))return;
+  pollBusy=true;const id=cur.id,tab=cur.tab,seq=markSeq;
+  try{
+    const [j,sc]=await Promise.all([api('/api/leads?sheetId='+encodeURIComponent(id)+'&tab='+encodeURIComponent(tab)),pullSettings()]);
+    if(id!==cur.id||tab!==cur.tab)return;
+    let rebuild=false;
+    if(!busy&&seq===markSeq){ // skip the list if you clicked something while this was loading
+      const sig=JSON.stringify([j.headers,j.rows]);
+      if(sig!==lastSig){lastSig=sig;headers=j.headers;raw=j.rows;track=j.track;rebuild=true}
+      syncedAt=j.syncedAt;showSynced();
+    }
+    if(sc)applySettingsUi();else if(rebuild)build();
+  }catch(e){$('#syncInfo').textContent='⚠ Offline, will retry'}
+  finally{pollBusy=false}
+}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')flushSave(true);else refreshAll()});
+window.addEventListener('pagehide',()=>flushSave(true));
+window.addEventListener('focus',()=>{if(Date.now()-syncedAt>5000)refreshAll()});
+setInterval(()=>{if(document.visibilityState==='visible')refreshAll()},POLL_MS);
 
 /* ---------- columns ---------- */
 function detect(hd){
@@ -320,6 +441,7 @@ function build(){
 const ok=c=>c.ph.kind==='mobile'&&!c.dup;
 function stageOf(c){
   const t=c.t;
+  if(t.status==='Skipped')return{key:'skipped',next:null};
   if(t.replied)return{key:'replied',next:null};
   if(t.fu2)return{key:'done',next:null};
   if(t.fu1)return{key:'sent',next:'fu2',due:daysSince(t.first)>=7};
@@ -331,6 +453,8 @@ function stageOf(c){
 const tplGet=(cp,k)=>store.get('wa_tpl_'+cp+'_'+k,TPLS[cp][k]);
 function loadTplUi(){
   $('#offerBox').classList.toggle('hide',camp!=='ca');
+  $('#hookBox').classList.toggle('hide',camp!=='biz');renderHooks();
+  $('#me').value=store.get('wa_me','');
   $('#offer').value=store.get('wa_offer',OFFER_DEFAULT);
   $('#tpl').value=tplGet(camp,kind);
 }
@@ -338,7 +462,7 @@ function msg(c,k){
   const me=$('#me').value.trim()||'Krish';
   const offer=$('#offer').value.trim()||OFFER_DEFAULT;
   return tplGet(camp,k||kind).replace(/\{name\}/g,c.short).replace(/\{area\}/g,c.areaShort||'your area').replace(/\{type\}/g,c.type||'your business')
-    .replace(/\{sector\}/g,c.sec.label).replace(/\{pain\}/g,c.sec.pain).replace(/\{hook\}/g,c.sec.hook).replace(/\{me\}/g,me).replace(/\{offer\}/g,offer);
+    .replace(/\{sector\}/g,c.sec.label).replace(/\{pain\}/g,c.sec.pain).replace(/\{hook\}/g,()=>pickHook(c)).replace(/\{me\}/g,me).replace(/\{offer\}/g,offer);
 }
 
 /* ---------- render ---------- */
@@ -361,6 +485,7 @@ function render(){
     if(fa&&c.area!==fa)return false;
     if(q&&!(c.name+' '+c.area+' '+c.type).toLowerCase().includes(q))return false;
     const st=stageOf(c),o=ok(c);
+    if(fs==='skipped')return o&&st.key==='skipped';
     if(fs==='new')return o&&st.key==='new';
     if(fs==='due')return o&&st.key==='sent'&&st.due;
     if(fs==='sent')return o&&(st.key==='sent'&&!st.due||st.key==='done');
@@ -383,7 +508,9 @@ function row(c){
     else act='<span class="tag no">No number</span>';
   }else{
     const st=stageOf(c),r=c.r;
-    if(st.key==='replied'){
+    if(st.key==='skipped'){
+      act=`<span class="tag no">Skipped</span><button class="link" data-r="${r}" data-act="undo">undo</button>`;
+    }else if(st.key==='replied'){
       const sel=['','Interested','Not interested','Partner joined','Referred a client','Client won'].map(o=>`<option ${o===c.t.outcome?'selected':''}>${esc(o)}</option>`).join('');
       act=`<span class="tag reply">Replied ${esc(fmtD(c.t.replied))}</span><select class="sm" data-r="${r}" data-act="outcome" title="Outcome">${sel}</select><button class="link" data-r="${r}" data-act="note">note</button><button class="link" data-r="${r}" data-act="undo">undo</button>`;
     }else if(st.next){
@@ -391,7 +518,7 @@ function row(c){
       const lab=st.next==='first'?stepLabel.first:(st.next==='fu1'?'Follow-up 1':'Last check-in');
       const tag=st.next==='first'?'':`<span class="tag ${st.due?'due':'sent'}">${st.due?'Follow-up due':'Sent '+esc(fmtD(c.t.first))}</span>`;
       act=`${tag}<a class="btn wa" data-r="${r}" data-step="${st.next}" href="${url}" target="_blank" rel="noopener noreferrer">${lab}</a>`+
-        (st.next==='first'?'':`<button class="btn ghost sm" data-r="${r}" data-act="replied">Replied</button><button class="link" data-r="${r}" data-act="undo">undo</button>`);
+        (st.next==='first'?`<button class="link" data-r="${r}" data-act="skip" title="Wrong number, closed, not relevant">skip</button>`:`<button class="btn ghost sm" data-r="${r}" data-act="replied">Replied</button><button class="link" data-r="${r}" data-act="undo">undo</button>`);
     }else{
       act=`<span class="tag sent">All 3 sent</span><button class="btn ghost sm" data-r="${r}" data-act="replied">Replied</button><button class="link" data-r="${r}" data-act="undo">undo</button>`;
     }
@@ -401,19 +528,25 @@ function row(c){
 
 /* ---------- writing back to the sheet ---------- */
 async function mark(c,set){
-  const old=Object.assign({},c.t);
+  const old=Object.assign({},c.t);let clash=false;
   for(const [h,v] of Object.entries(set))c.t[K[h]]=v==='$now'?istNow():v;
   render();busy++;
   try{
     const j=await api('/api/mark',{method:'POST',body:JSON.stringify({sheetId:cur.id,tab:cur.tab,row:c.r,phone:c.ph.num,phoneCol:ci.p,set})});
     for(const [h,v] of Object.entries(j.applied||{}))c.t[K[h]]=v;
     render();
-  }catch(e){c.t=old;render();toast('Not saved: '+e.message)}
-  finally{busy--}
+  }catch(e){
+    c.t=old;render();
+    if(/^Already messaged/.test(e.message)){clash=true;toast('Another device already messaged this contact. Updating your list…')}
+    else toast('Not saved: '+e.message);
+  }
+  finally{busy--;markSeq++}
+  if(clash)setTimeout(refreshAll,100);
 }
 const byRow=r=>contacts.find(c=>c.r===+r);
 function statusOf(t){return t.replied?'Replied':t.fu2?'Follow-up 2 sent':t.fu1?'Follow-up 1 sent':t.first?'Messaged':''}
 function undoSet(c){
+  if(c.t.status==='Skipped')return{'WA Status':''};
   const t=c.t,n=Object.assign({},t);
   if(t.replied)n.replied='';else if(t.fu2)n.fu2='';else if(t.fu1)n.fu1='';else n.first='';
   return{'WA Status':statusOf(n),'First Sent':n.first,'Follow-up 1 Sent':n.fu1,'Follow-up 2 Sent':n.fu2,'Replied':n.replied};
@@ -429,6 +562,7 @@ $('#list').addEventListener('click',e=>{
   const b=e.target.closest('[data-act]');if(!b||b.tagName==='SELECT')return;
   const c=byRow(b.dataset.r);if(!c)return;
   if(b.dataset.act==='replied')mark(c,{'WA Status':'Replied','Replied':'$now'});
+  else if(b.dataset.act==='skip')mark(c,{'WA Status':'Skipped'});
   else if(b.dataset.act==='undo')mark(c,undoSet(c));
   else if(b.dataset.act==='note'){const v=prompt('Note for '+c.short,c.t.notes);if(v!==null)mark(c,{'Notes':v})}
 });
@@ -449,6 +583,25 @@ $('#offer').addEventListener('input',()=>{store.set('wa_offer',$('#offer').value
 $('#camp').onchange=e=>{camp=e.target.value;store.set('camp_'+cur.id+'|'+cur.tab,camp);loadTplUi();render()};
 $('#resetTpl').onclick=()=>{store.set('wa_tpl_'+camp+'_'+kind,TPLS[camp][kind]);$('#tpl').value=TPLS[camp][kind];render()};
 document.querySelectorAll('[data-ins]').forEach(b=>b.onclick=()=>{const t=$('#tpl'),s=t.selectionStart,v=b.dataset.ins;t.value=t.value.slice(0,s)+v+t.value.slice(t.selectionEnd);t.focus();t.selectionStart=t.selectionEnd=s+v.length;t.dispatchEvent(new Event('input'))});
+
+$('#hookList').addEventListener('input',e=>{
+  const t=e.target;if(!(t.dataset&&t.dataset.f))return;
+  hookSet(t.dataset.id,t.dataset.f,t.value);
+  const sp=$('#hookList').querySelector('[data-rs="'+t.dataset.id+'"]'); // show or hide "Reset to default" without redrawing (keeps your cursor)
+  if(sp)sp.innerHTML=hookStore().o[t.dataset.id]?'<button class="link" data-reset="'+t.dataset.id+'">Reset to default</button>':'';
+});
+$('#hookList').addEventListener('click',e=>{
+  const d=e.target.closest('[data-del]'),r=e.target.closest('[data-reset]');
+  if(d){if(!confirm('Delete this hook?'))return;const h=hookStore();h.c=h.c.filter(x=>x.id!==d.dataset.del);store.set('wa_hooks',h);hooksChanged();renderHooks()}
+  if(r){const h=hookStore();delete h.o[r.dataset.reset];store.set('wa_hooks',h);hooksChanged();renderHooks()}
+});
+$('#nhAdd').onclick=()=>{
+  const name=$('#nhName').value.trim(),kw=$('#nhKw').value.trim(),hook=$('#nhHook').value.trim();
+  if(!name||!kw||!hook)return toast('Fill in the business type, match words and at least one hook.');
+  const h=hookStore();h.c.unshift({id:'c'+Date.now(),name,kw,hook,label:$('#nhLabel').value.trim(),pain:$('#nhPain').value.trim()});
+  store.set('wa_hooks',h);['#nhName','#nhKw','#nhHook','#nhLabel','#nhPain'].forEach(s=>$(s).value='');
+  hooksChanged();renderHooks();toast('Hook added. It is used for contacts whose type matches.');
+};
 
 start();
 </script>

@@ -89,7 +89,7 @@ const demo = (() => {
     ['Patil Accounting', '022 2745 4444', 'Landline/Other', 'Vashi, Navi Mumbai', 'chartered accountant', 'none', 4.2, 9],
     ['Jain Associates', '+91 98200 55555', 'Mobile', 'Kamothe, Navi Mumbai', 'chartered accountant', 'none', 4.8, 41],
   ];
-  const db = { demo1: { title: 'Demo: CA partners', tabs: { 'CA Leads': [head, ...rows] } } };
+  const db = { demo1: { title: 'Demo: CA partners', settings: {}, tabs: { 'CA Leads': [head, ...rows] } } };
   return db;
 })();
 
@@ -166,7 +166,7 @@ async function listConnected() {
       });
       return {
         id, title: label || r.data.properties.title, ok: true,
-        tabs: r.data.sheets.map((s) => ({ title: s.properties.title, rows: Math.max(0, (s.properties.gridProperties.rowCount || 1) - 1) })),
+        tabs: r.data.sheets.filter((s) => !s.properties.title.startsWith('_')).map((s) => ({ title: s.properties.title, rows: Math.max(0, (s.properties.gridProperties.rowCount || 1) - 1) })),
       };
     } catch (e) { return { id, title: label || id, ok: false, error: friendly(e) }; }
   }));
@@ -244,7 +244,70 @@ async function ensureTracking(id, tab, headerRow) {
   return map;
 }
 
+/* ---------- settings shared by every device (kept in a hidden "_Settings" tab of the sheet) ---------- */
+const SETTINGS_TAB = '_Settings';
+const _settingsReady = new Set();
+
+async function ensureSettingsTab(id) {
+  if (_settingsReady.has(id)) return;
+  const s = sheetsClient();
+  const r = await s.spreadsheets.get({ spreadsheetId: id, fields: 'sheets.properties(title)' });
+  if (!r.data.sheets.some((x) => x.properties.title === SETTINGS_TAB)) {
+    try {
+      await s.spreadsheets.batchUpdate({
+        spreadsheetId: id,
+        requestBody: { requests: [{ addSheet: { properties: { title: SETTINGS_TAB, hidden: true, gridProperties: { rowCount: 200, columnCount: 4 } } } }] },
+      });
+      await s.spreadsheets.values.update({
+        spreadsheetId: id, range: q(SETTINGS_TAB) + '!A1:D1', valueInputOption: 'RAW',
+        requestBody: { values: [['Key', 'Value', 'Updated', 'Managed by the outreach app. Please do not edit.']] },
+      });
+    } catch (e) { if (!/already exists/i.test(e.message || '')) throw e; } // another device created it a moment ago
+  }
+  _settingsReady.add(id);
+}
+
+async function readSettings(id) { // -> { key: valueString }
+  assertConnected(id);
+  if (DEMO) return Object.assign({}, (demo[id] && demo[id].settings) || {});
+  let rows;
+  try {
+    const r = await sheetsClient().spreadsheets.values.get({
+      spreadsheetId: id, range: q(SETTINGS_TAB) + '!A:B', valueRenderOption: 'UNFORMATTED_VALUE',
+    });
+    rows = r.data.values || [];
+  } catch (e) {
+    if (/unable to parse range|not found/i.test(e.message || '')) return {}; // tab does not exist yet
+    throw e;
+  }
+  const out = {};
+  rows.slice(1).forEach((r) => { if (r[0]) out[String(r[0])] = String(r[1] == null ? '' : r[1]); });
+  return out;
+}
+
+async function writeSettings(id, patch) { // patch: { key: valueString } - only these keys change
+  assertConnected(id);
+  const keys = Object.keys(patch);
+  if (!keys.length) return;
+  if (DEMO) { demo[id].settings = Object.assign(demo[id].settings || {}, patch); return; }
+  const s = sheetsClient();
+  await ensureSettingsTab(id);
+  const cur = (await s.spreadsheets.values.get({ spreadsheetId: id, range: q(SETTINGS_TAB) + '!A:A' })).data.values || [];
+  const rowOf = {};
+  cur.forEach((r, i) => { if (i > 0 && r[0]) rowOf[String(r[0])] = i + 1; });
+  const now = istNow(), upd = [], add = [];
+  for (const k of keys) {
+    const val = String(patch[k]).slice(0, 45000);
+    if (rowOf[k]) upd.push({ range: `${q(SETTINGS_TAB)}!B${rowOf[k]}:C${rowOf[k]}`, values: [[val, now]] });
+    else add.push([k, val, now]);
+  }
+  if (upd.length) await s.spreadsheets.values.batchUpdate({ spreadsheetId: id, requestBody: { valueInputOption: 'RAW', data: upd } });
+  if (add.length) await s.spreadsheets.values.append({
+    spreadsheetId: id, range: q(SETTINGS_TAB) + '!A:C', valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS', requestBody: { values: add },
+  });
+}
+
 module.exports = {
   DEMO, SECRET, PASSWORD, TRACK, sign, verify, cookies, authed, safeEq, send,
-  digits, q, istNow, listConnected, readTab, readCell, writeCells, ensureTracking, assertConnected,
+  digits, q, istNow, listConnected, readTab, readCell, writeCells, ensureTracking, assertConnected, readSettings, writeSettings,
 };

@@ -441,7 +441,7 @@ function build(){
 const ok=c=>c.ph.kind==='mobile'&&!c.dup;
 function stageOf(c){
   const t=c.t;
-  if(t.status==='Skipped')return{key:'skipped',next:null};
+  if(t.status==='Skipped'||t.status==='Opted out')return{key:'skipped',next:null};
   if(t.replied)return{key:'replied',next:null};
   if(t.fu2)return{key:'done',next:null};
   if(t.fu1)return{key:'sent',next:'fu2',due:daysSince(t.first)>=7};
@@ -509,7 +509,7 @@ function row(c){
   }else{
     const st=stageOf(c),r=c.r;
     if(st.key==='skipped'){
-      act=`<span class="tag no">Skipped</span><button class="link" data-r="${r}" data-act="undo">undo</button>`;
+      act=c.t.status==='Opted out'?'<span class="tag no">Opted out, do not message</span>':`<span class="tag no">Skipped</span><button class="link" data-r="${r}" data-act="undo">undo</button>`;
     }else if(st.key==='replied'){
       const sel=['','Interested','Not interested','Partner joined','Referred a client','Client won'].map(o=>`<option ${o===c.t.outcome?'selected':''}>${esc(o)}</option>`).join('');
       act=`<span class="tag reply">Replied ${esc(fmtD(c.t.replied))}</span><select class="sm" data-r="${r}" data-act="outcome" title="Outcome">${sel}</select><button class="link" data-r="${r}" data-act="note">note</button><button class="link" data-r="${r}" data-act="undo">undo</button>`;
